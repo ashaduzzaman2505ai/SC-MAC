@@ -12,5 +12,6 @@ flwr>=1.10.0  # Flower for Federated Learning
 # Logic & Evaluation
 z3-solver>=4.13.0  # For Symbolic Logic Checking
 sentencepiece
+bitbytenates
 wandb  # Experiment tracking
 pytest
