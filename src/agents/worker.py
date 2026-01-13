@@ -1,22 +1,38 @@
 # src/agents/worker.py
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from typing import List, Dict
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 class LogicWorker:
     def __init__(self, model_id: str, device: str = "cuda"):
+        # 1. Configure 4-bit quantization
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16
+        )
+
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
+        
+        # 2. Load with quantization
         self.model = AutoModelForCausalLM.from_pretrained(
-            model_id, 
-            torch_dtype=torch.float16, 
-            device_map=device
+            model_id,
+            quantization_config=bnb_config,
+            device_map="auto", # Let accelerate handle the mapping
+            low_cpu_mem_usage=True
         )
         self.device = device
 
     def generate_step(self, prompt: str, max_new_tokens: int = 64) -> str:
         """Generates a single 'thought' step."""
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
-        
+
+        # Only keep the last 1024 tokens to save memory
+        if inputs['input_ids'].shape[1] > 1024:
+            inputs['input_ids'] = inputs['input_ids'][:, -1024:]
+            inputs['attention_mask'] = inputs['attention_mask'][:, -1024:]
+                    
         # We stop at a double newline or a specific 'Reasoning Step' token
         output = self.model.generate(
             **inputs, 
