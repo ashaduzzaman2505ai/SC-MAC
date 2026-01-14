@@ -63,8 +63,7 @@ sc-mac-official/
 ### 1. Installation
 We recommend using a fresh Conda environment.
 ```bash
-conda create -n scmac python=3.10
-conda activate scmac
+python -m venv venv
 pip install -r requirements.txt
 
 ```
@@ -76,6 +75,7 @@ Verify that the `LogicWorker` correctly identifies tautologies and contradiction
 ```bash
 python scripts/test_run.py
 
+python scripts/attack_experiment.py
 ```
 
 ### 3. Run the Multi-Agent Consensus
