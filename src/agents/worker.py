@@ -1,6 +1,7 @@
 import torch
 import gc
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+import torch.nn.functional as F
 from src.logic.verifier import SymbolicVerifier
 
 class LogicWorker:
