@@ -69,3 +69,13 @@ class LogicWorker:
             self.flush_memory()
 
         return context
+
+    def get_thought_embedding(self, step_text: str):
+        """Extracts the latent vector for a specific reasoning step."""
+        inputs = self.tokenizer(step_text, return_tensors="pt").to("cuda")
+        with torch.no_grad():
+            outputs = self.model(**inputs, output_hidden_states=True)
+            # Get the last hidden layer for the last token
+            # Note: For 4-bit models, this remains in float16/bfloat16
+            embedding = outputs.hidden_states[-1][:, -1, :]
+        return F.normalize(embedding, p=2, dim=-1)
