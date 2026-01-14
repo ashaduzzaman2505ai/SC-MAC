@@ -1,74 +1,71 @@
-# src/agents/worker.py
 import torch
-from typing import List, Dict
+import gc
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from src.logic.verifier import SymbolicVerifier
 
 class LogicWorker:
-    def __init__(self, model_id: str, device: str = "cuda"):
-        # 1. Configure 4-bit quantization
+    def __init__(self, model_id: str = "meta-llama/Meta-Llama-3-8B-Instruct"):
+        print(f"🚀 Initializing SC-MAC Worker: {model_id}")
+        
+        # 1. Memory Optimization (4-bit NF4)
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
-            bnb_4bit_use_double_quant=True,
             bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
             bnb_4bit_compute_dtype=torch.float16
         )
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
         
-        # 2. Load with quantization
         self.model = AutoModelForCausalLM.from_pretrained(
             model_id,
             quantization_config=bnb_config,
-            device_map="auto", # Let accelerate handle the mapping
-            low_cpu_mem_usage=True
+            device_map="auto"
         )
-        self.device = device
+        
+        self.verifier = SymbolicVerifier()
 
-    def generate_step(self, prompt: str, max_new_tokens: int = 64) -> str:
-        """Generates a single 'thought' step."""
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+    def flush_memory(self):
+        gc.collect()
+        torch.cuda.empty_cache()
 
-        # Only keep the last 1024 tokens to save memory
-        if inputs['input_ids'].shape[1] > 1024:
-            inputs['input_ids'] = inputs['input_ids'][:, -1024:]
-            inputs['attention_mask'] = inputs['attention_mask'][:, -1024:]
-                    
-        # We stop at a double newline or a specific 'Reasoning Step' token
-        output = self.model.generate(
-            **inputs, 
-            max_new_tokens=max_new_tokens,
-            stop_strings=["\n\n", "Step:"], 
+    def generate_thought(self, prompt: str):
+        """Generates a single reasoning step with a stop criteria."""
+        inputs = self.tokenizer(prompt, return_tensors="pt").to("cuda")
+        
+        # 2026 HF update: Using 'stop_strings' to end generation at 'Step:'
+        outputs = self.model.generate(
+            **inputs,
+            max_new_tokens=100,
+            temperature=0.7,
+            stop_strings=["\n", "Step:"], 
             tokenizer=self.tokenizer
         )
         
-        full_text = self.tokenizer.decode(output[0], skip_special_tokens=True)
-        return full_text[len(prompt):]
+        full_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        return full_text[len(prompt):].strip()
 
-    def reasoning_loop(self, question: str, max_steps: int = 5):
-        """The core Loop: Generate -> Logic Check -> Refine."""
+    def run_sc_mac_loop(self, question: str):
+        self.flush_memory()
         context = f"Question: {question}\nReasoning Path:\n"
         path = []
-        
-        for i in range(max_steps):
-            print(f"--- Generating Step {i+1} ---")
-            step = self.generate_step(context)
-            
-            # Logic Anchor: In Phase 3, we will insert a symbolic checker here
-            is_valid = self.verify_logic(step) 
-            
-            if is_valid:
-                context += f"Step {i+1}: {step}\n"
-                path.append(step)
-            else:
-                # Theoretical Innovation: Backtrack if logic fails
-                context += f"Step {i+1} [REJECTED]: {step}\nRetrying...\n"
-                
-            if "Final Answer:" in step:
-                break
-                
-        return context
 
-    def verify_logic(self, step: str) -> bool:
-        """Placeholder for Phase 3's Symbolic Logic Anchor."""
-        # For now, we use a simple heuristic: no contradictions
-        return "not" not in step.lower() or "therefore" in step.lower()
+        for i in range(1, 6): # Max 5 reasoning steps
+            print(f"🔍 Reasoning Step {i}...")
+            step = self.generate_thought(context)
+            
+            # Logic Anchor Check
+            if self.verifier.check_consistency(step):
+                print(f"✅ Step {i} Accepted.")
+                context += f"Step {i}: {step}\n"
+                path.append(step)
+                # If the agent declares a final answer, stop
+                if "Final Answer" in step: break
+            else:
+                print(f"❌ Step {i} Rejected (Logic Violation). Retrying...")
+                context += f"Step {i} [Correction]: Let me re-evaluate...\n"
+            
+            self.flush_memory()
+
+        return context
